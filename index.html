@@ -181,11 +181,15 @@ tr.miss td:first-child{color:var(--bad); font-weight:600;}
 
 <script>
 /* ============================================================
-   เรียก serverless function ของตัวเอง (api/data.js) ไม่ได้ยิงไป GAS ตรงๆ
-   URL ของ GAS เก็บใน Environment Variable ชื่อ GAS_URL ฝั่ง Vercel
-   จึงไม่ถูก commit ขึ้น git และ browser มองไม่เห็น
+   URL ของ Google Apps Script Web App (deploy แบบ "Anyone")
+
+   ⚠️ URL นี้อยู่ในไฟล์ จึงถูก commit ขึ้น git และใครเปิด View Source ก็เห็น
+      = ใครมี URL นี้ก็ดึงข้อมูลทั้งหมดได้โดยไม่ต้อง login
+      -> ตั้ง repo เป็น Private เสมอ
+      -> ถ้าอยากซ่อน URL ให้เปลี่ยนเป็น '/api/data' แล้วตั้ง env var GAS_URL
+         ใน Vercel แทน (ไฟล์ api/data.js เตรียมไว้ให้แล้ว)
    ============================================================ */
-var API_URL = '/api/data';
+var API_URL = 'https://script.google.com/macros/s/AKfycbzOF8HogURN1v00mShLXCbo54eEQHAbxemV2QJY6l2qPeQEruxpE4LMdMZfv1Dbrgo3Zg/exec';
 
 var DATA = null;
 var FILTER = 'open';      // open = ยังไม่ครบ (ค่าเริ่มต้น) | done | partial | none
@@ -205,16 +209,19 @@ function load(){
   $('app').innerHTML = '<div class="skel"></div><div class="skel"></div><div class="skel"></div>';
   $('btnRefresh').disabled = true;
 
-  fetch(API_URL + '?t=' + Date.now(), { cache: 'no-store' })
-    .then(function(r){
-      return r.json().then(function(body){
-        // serverless function ส่งข้อความอธิบายมาใน body ด้วย ใช้ตัวนั้นถ้ามี
-        if (!r.ok) throw new Error((body && body.error) || ('HTTP ' + r.status));
-        if (body && body.error) throw new Error(body.error);
-        return body;
-      });
-    })
-    .then(function(d){
+  // ยิงไป GAS ตรงๆ ต้องมี action=all ส่วน /api/data (proxy) ใส่ให้เองอยู่แล้ว
+  var url = API_URL + (API_URL.indexOf('http') === 0 ? '?action=all&t=' : '?t=') + Date.now();
+
+  fetch(url, { cache: 'no-store' })
+    .then(function(r){ return r.text(); })
+    .then(function(txt){
+      // GAS ตอบเป็น HTML หน้า login ถ้า deploy ไม่ใช่ "Anyone"
+      // ดักไว้ก่อน ไม่งั้นจะเจอ JSON parse error ที่ไม่บอกอะไรเลย
+      if (txt.trim().charAt(0) === '<') {
+        throw new Error('ได้ HTML แทน JSON — ตรวจว่า deploy GAS เป็น "Anyone" แล้วหรือยัง');
+      }
+      var d = JSON.parse(txt);
+      if (d.error) throw new Error(d.error);
       DATA = d;
       paintHeader(); paint();
     })
