@@ -78,6 +78,96 @@
     font-variant-numeric: tabular-nums;
   }
 
+  /* ---------- ผู้ใช้ที่ login ---------- */
+
+  .who {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--ink-muted);
+  }
+  .who b { color: var(--ink); font-weight: 500; }
+
+  .btn-logout {
+    padding: 5px 11px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--ink-muted);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .btn-logout:hover { color: var(--ink); border-color: #c3cad3; }
+
+  /* ---------- หน้า login ---------- */
+
+  .login { display: grid; place-items: center; padding-block: 72px 96px; }
+  .login-card {
+    width: 100%;
+    max-width: 360px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 26px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .login-card h2 {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+  }
+  .login-card p {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-muted);
+    line-height: 1.5;
+  }
+  .login-card label {
+    font-size: 11px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-muted);
+    margin-top: 4px;
+  }
+  .login-card input {
+    width: 100%;
+    padding: 10px 12px;
+    font: inherit;
+    font-size: 16px;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    color: var(--ink);
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+  }
+  .login-card button {
+    margin-top: 4px;
+    padding: 10px 14px;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    color: #fff;
+    background: var(--accent);
+    border: 0;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  .login-card button:hover { background: #1a5178; }
+  .login-card button[disabled] { opacity: .55; cursor: default; }
+
+  .login-error {
+    padding: 9px 11px;
+    font-size: 13px;
+    color: var(--bad);
+    background: var(--bad-bg);
+    border-radius: 5px;
+  }
+
   .stamp {
     text-align: right;
     font-size: 12px;
@@ -472,6 +562,10 @@
       <h1>ตรวจการปรับสต็อก</h1>
       <div class="cycle">รอบ <strong id="m-cycle">กำลังโหลด…</strong> · universe <span id="m-days">–</span> วันล่าสุด</div>
     </div>
+    <div class="who" id="who" hidden>
+      <span><b id="who-name">–</b> <span id="who-team"></span></span>
+      <button type="button" class="btn-logout" id="btn-logout">ออกจากระบบ</button>
+    </div>
     <div class="stamp">
       อัพเดทเมื่อ
       <b id="m-stamp">–</b>
@@ -553,6 +647,19 @@
   </div>
 
  </div>
+
+  <div class="login" id="login" hidden>
+    <form class="login-card" id="login-form" autocomplete="on">
+      <h2>เข้าสู่ระบบ</h2>
+      <p>กรอกเบอร์โทรที่ลงทะเบียนไว้กับโครงการ ระบบจะจำไว้ให้ 7 วัน</p>
+      <label for="login-mobile">เบอร์โทร</label>
+      <input id="login-mobile" name="mobile" type="tel" inputmode="numeric"
+             autocomplete="tel" placeholder="08xxxxxxxx" maxlength="20" required>
+      <button type="submit" id="login-btn">เข้าสู่ระบบ</button>
+      <div class="login-error" id="login-error" hidden></div>
+    </form>
+  </div>
+
   <div class="empty" id="boot">กำลังโหลดข้อมูล…</div>
 </div>
 
@@ -588,7 +695,10 @@
   /* ---------------- โหลดข้อมูล ---------------- */
 
   function load(firstTime) {
-    var url = API_URL + (API_URL.indexOf('?') >= 0 ? '&' : '?') + 'action=all&t=' + Date.now();
+    if (!session) return Promise.resolve();
+
+    var url = API_URL + (API_URL.indexOf('?') >= 0 ? '&' : '?') +
+      'k=' + encodeURIComponent(session.token) + '&t=' + Date.now();
 
     return fetch(url, { cache: 'no-store' })
       .then(function (r) { return r.text(); })
@@ -597,7 +707,13 @@
           throw new Error('ได้ HTML แทน JSON — ตรวจว่า deploy GAS เป็น "Anyone" แล้วหรือยัง');
         }
         var d = JSON.parse(txt);
+
+        if (!d.ok && d.code === 'AUTH') {
+          signOut('เซสชันหมดอายุ กรุณาเข้าสู่ระบบใหม่');
+          return;
+        }
         if (!d.ok) throw new Error(d.error || 'GAS ตอบว่าไม่สำเร็จ');
+
         apply(d);
         if (firstTime) {
           $('boot').hidden = true;
@@ -607,12 +723,101 @@
       .catch(function (err) {
         var msg = 'โหลดข้อมูลไม่สำเร็จ: ' + (err && err.message ? err.message : err);
         if (firstTime) {
+          $('boot').hidden = false;
           $('boot').textContent = msg;
         } else {
           $('m-stamp').textContent = 'ดึงข้อมูลใหม่ไม่สำเร็จ';
         }
       });
   }
+
+  /* ---------------- login ---------------- */
+
+  var SESSION_KEY = 'abbott_adjust_session_v1';
+  var session = null;
+
+  function readSession() {
+    try {
+      var raw = localStorage.getItem(SESSION_KEY);
+      if (!raw) return null;
+      var s = JSON.parse(raw);
+      return (s && s.token) ? s : null;
+    } catch (e) {
+      return null;     // โหมดส่วนตัว หรือ site data ถูกบล็อก
+    }
+  }
+
+  function writeSession(s) {
+    session = s;
+    try {
+      if (s) localStorage.setItem(SESSION_KEY, JSON.stringify(s));
+      else localStorage.removeItem(SESSION_KEY);
+    } catch (e) { /* จำไม่ได้ก็ใช้งานต่อได้ แค่ต้อง login ใหม่เมื่อรีเฟรช */ }
+  }
+
+  function showLogin(msg) {
+    $('login').hidden = false;
+    $('app').hidden = true;
+    $('boot').hidden = true;
+    $('who').hidden = true;
+    if (msg) {
+      $('login-error').hidden = false;
+      $('login-error').textContent = msg;
+    }
+    $('login-mobile').focus();
+  }
+
+  function signOut(msg) {
+    writeSession(null);
+    DATA = [];
+    showLogin(msg || '');
+  }
+
+  function startApp() {
+    $('login').hidden = true;
+    $('login-error').hidden = true;
+    $('boot').hidden = false;
+    $('boot').textContent = 'กำลังโหลดข้อมูล…';
+    var u = session.user || {};
+    $('who').hidden = false;
+    $('who-name').textContent = u.name || '–';
+    $('who-team').textContent = u.team ? '· ' + u.team : '';
+    load(true);
+  }
+
+  $('login-form').addEventListener('submit', function (ev) {
+    ev.preventDefault();
+    var mobile = $('login-mobile').value.trim();
+    if (!mobile) return;
+
+    var btn = $('login-btn');
+    btn.disabled = true;
+    btn.textContent = 'กำลังตรวจสอบ…';
+    $('login-error').hidden = true;
+
+    fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mobile: mobile })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (!d.ok) throw new Error(d.error || 'เข้าสู่ระบบไม่สำเร็จ');
+        writeSession({ token: d.token, user: d.user });
+        $('login-mobile').value = '';
+        startApp();
+      })
+      .catch(function (err) {
+        $('login-error').hidden = false;
+        $('login-error').textContent = (err && err.message) ? err.message : 'เข้าสู่ระบบไม่สำเร็จ';
+      })
+      .then(function () {
+        btn.disabled = false;
+        btn.textContent = 'เข้าสู่ระบบ';
+      });
+  });
+
+  $('btn-logout').addEventListener('click', function () { signOut(''); });
 
   /** แปลงรูปแบบจาก GAS ให้ตรงกับที่หน้านี้ใช้ */
   function apply(d) {
@@ -839,6 +1044,8 @@
     render();
   });
 
-  load(true);
-  setInterval(function () { load(false); }, REFRESH_MS);
+  session = readSession();
+  if (session) startApp(); else showLogin('');
+
+  setInterval(function () { if (session) load(false); }, REFRESH_MS);
 </script>

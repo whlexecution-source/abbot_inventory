@@ -45,6 +45,10 @@ var PAGE_ACTIVITY = 1000;
 var ACT_TYPE = 'stock_adjustment';
 var ONLY_COMPLETED = true;
 
+// login ด้วยเบอร์โทร - ชีตนี้อัพโหลดเอง ไม่ได้ดึงจาก CloudViu
+var SHEET_USERS = 'user_master';
+var TOKEN_TTL_DAYS = 7;
+
 var SHEET_OUTLETS = 'outlets';
 var SHEET_UNIVERSE = 'universe';
 var SHEET_WEBDATA = '_webdata';    // JSON สำเร็จรูป (ซ่อนไว้)
@@ -598,8 +602,16 @@ function doGet(e) {
   var body;
 
   try {
-    if (action !== 'all') {
+    if (action === 'ping') {
+      // เช็คว่า deploy ถูกต้องไหม โดยไม่เปิดเผยข้อมูล
+      body = JSON.stringify({ ok: true, ping: true, at: thaiDateTime_(new Date()) });
+
+    } else if (action !== 'all') {
       body = JSON.stringify({ ok: false, error: 'ไม่รู้จัก action: ' + action });
+
+    } else if (!checkToken_(e && e.parameter && e.parameter.k)) {
+      body = JSON.stringify({ ok: false, code: 'AUTH', error: 'กรุณาเข้าสู่ระบบใหม่' });
+
     } else {
       // ทางเร็ว: cache ตอบได้เลย ไม่ต้องเปิด Spreadsheet
       body = cacheGet_();
@@ -622,6 +634,151 @@ function doGet(e) {
   return ContentService
     .createTextOutput(body)
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * login - รับเบอร์โทรทาง POST body ไม่ใช่ query string
+ * เบอร์โทรเป็นข้อมูลส่วนบุคคล ถ้าอยู่ใน URL จะถูกเก็บใน log ของทุกตัวกลางที่ผ่าน
+ */
+function doPost(e) {
+  var body;
+  try {
+    var req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+
+    if (req.action !== 'login') {
+      body = JSON.stringify({ ok: false, error: 'ไม่รู้จัก action: ' + req.action });
+    } else {
+      var u = findUser_(req.mobile);
+      body = u
+        ? JSON.stringify({
+            ok: true,
+            token: makeToken_(u.id),
+            user: { id: u.id, name: u.name, team: u.team, role: u.role }
+          })
+        : JSON.stringify({ ok: false, code: 'NOUSER', error: 'ไม่พบเบอร์นี้ในระบบ' });
+    }
+  } catch (err) {
+    body = JSON.stringify({ ok: false, error: String(err && err.message ? err.message : err) });
+  }
+
+  return ContentService
+    .createTextOutput(body)
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ========================== ผู้ใช้ + token ========================== */
+
+/**
+ * หาผู้ใช้จากเบอร์โทรในชีต user_master
+ * ชีตนี้อัพโหลดเอง - ไม่มีใน CloudViu API
+ */
+function findUser_(mobile) {
+  var key = normMobile_(mobile);
+  if (!key) return null;
+
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USERS);
+  if (!sheet || sheet.getLastRow() < 2) {
+    throw new Error('ไม่มีชีต ' + SHEET_USERS + ' - อัพโหลดรายชื่อผู้ใช้ก่อน');
+  }
+
+  var values = sheet.getDataRange().getValues();
+  var head = values[0].map(function (h) { return String(h).trim(); });
+  var iMobile = head.indexOf('mobile');
+  var iId = head.indexOf('user_id');
+  var iName = head.indexOf('display_name');
+  var iTeam = head.indexOf('team');
+  var iRole = head.indexOf('user_role');
+  if (iMobile < 0) throw new Error('ชีต ' + SHEET_USERS + ' ไม่มีคอลัมน์ mobile');
+
+  for (var r = 1; r < values.length; r++) {
+    if (normMobile_(values[r][iMobile]) !== key) continue;
+    return {
+      id: iId >= 0 ? String(values[r][iId]) : String(r),
+      name: iName >= 0 ? String(values[r][iName] || '') : '',
+      team: iTeam >= 0 ? String(values[r][iTeam] || '') : '',
+      role: iRole >= 0 ? String(values[r][iRole] || '') : ''
+    };
+  }
+  return null;
+}
+
+/**
+ * เบอร์โทรในชีตอาจกลายเป็นตัวเลขแล้วเลข 0 หน้าหาย (962397462)
+ * หรือผู้ใช้พิมพ์มาเป็น 081-234-5678 / +66 81 234 5678
+ */
+function normMobile_(v) {
+  var d = String(v === null || v === undefined ? '' : v).replace(/\D/g, '');
+  if (!d) return '';
+  if (d.length === 11 && d.indexOf('66') === 0) d = '0' + d.substring(2);   // +66...
+  if (d.length === 9) d = '0' + d;                                          // 0 หน้าหาย
+  return d;
+}
+
+/**
+ * token แบบไม่เก็บ state - ตัว token เซ็นด้วย HMAC ตรวจสอบได้โดยไม่ต้องจำอะไรไว้
+ * ข้างในมีแค่ user_id กับวันหมดอายุ ไม่มีเบอร์โทร
+ */
+function makeToken_(userId) {
+  var payload = userId + '.' + (Date.now() + TOKEN_TTL_DAYS * 86400000);
+  return payload + '.' + sign_(payload);
+}
+
+/** คืน user_id ถ้า token ใช้ได้ ไม่งั้น null */
+function checkToken_(token) {
+  if (!token) return null;
+  var p = String(token).split('.');
+  if (p.length !== 3) return null;
+
+  var payload = p[0] + '.' + p[1];
+  if (sign_(payload) !== p[2]) return null;        // ถูกแก้ไข
+  if (Number(p[1]) < Date.now()) return null;      // หมดอายุ
+  return p[0];
+}
+
+function sign_(s) {
+  var secret = PropertiesService.getScriptProperties().getProperty('SESSION_SECRET');
+  if (!secret) {
+    throw new Error('ยังไม่ได้ตั้ง SESSION_SECRET - รัน makeSessionSecret() หนึ่งครั้ง');
+  }
+  return Utilities.base64EncodeWebSafe(
+    Utilities.computeHmacSha256Signature(s, secret)
+  ).replace(/=+$/, '');
+}
+
+/**
+ * สร้าง secret สำหรับเซ็น token - รันครั้งเดียวตอนติดตั้ง
+ * รันซ้ำจะทำให้ทุกคนที่ login อยู่ต้อง login ใหม่
+ */
+function makeSessionSecret() {
+  var p = PropertiesService.getScriptProperties();
+  if (p.getProperty('SESSION_SECRET')) {
+    Logger.log('มี SESSION_SECRET อยู่แล้ว - ถ้าจะเปลี่ยนให้ลบของเดิมออกก่อน');
+    return;
+  }
+  p.setProperty('SESSION_SECRET', Utilities.getUuid() + Utilities.getUuid());
+  Logger.log('สร้าง SESSION_SECRET แล้ว');
+}
+
+/** ตรวจว่าชีต user_master อ่านได้ไหม - ไม่พิมพ์เบอร์โทรออกมา */
+function checkUsers() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_USERS);
+  if (!sheet) { Logger.log('!! ไม่มีชีต %s', SHEET_USERS); return; }
+
+  var values = sheet.getDataRange().getValues();
+  Logger.log('ชีต %s: %s แถว', SHEET_USERS, values.length - 1);
+  Logger.log('คอลัมน์: %s', values[0].join(', '));
+
+  var head = values[0].map(function (h) { return String(h).trim(); });
+  var iMobile = head.indexOf('mobile');
+  if (iMobile < 0) { Logger.log('!! ไม่มีคอลัมน์ mobile'); return; }
+
+  var bad = 0, dup = {}, seen = {};
+  for (var r = 1; r < values.length; r++) {
+    var m = normMobile_(values[r][iMobile]);
+    if (m.length !== 10) bad++;
+    if (seen[m]) dup[m] = true; else seen[m] = true;
+  }
+  Logger.log('เบอร์ที่ไม่ใช่ 10 หลัก: %s | เบอร์ซ้ำ: %s', bad, Object.keys(dup).length);
 }
 
 /* ========================== trigger ========================== */
