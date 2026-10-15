@@ -558,10 +558,12 @@
 
 <script>
   /* ----------------------------------------------------------------
-   * ใส่ URL ของ GAS Web App (ลงท้าย /exec) ตรงนี้
-   * Deploy เป็น Execute as: Me, Who has access: Anyone
+   * ยิงผ่าน serverless proxy (api/data.js) ไม่ใช่ GAS ตรงๆ
+   * เพื่อให้ได้ cache ที่ edge และไม่ต้องเอา URL ของ GAS มาไว้ในไฟล์นี้
+   *
+   * ถ้าจะทดสอบโดยไม่ผ่าน Vercel ให้เปลี่ยนเป็น URL ของ GAS ที่ลงท้าย /exec
    * ---------------------------------------------------------------- */
-  var API_URL = 'https://script.google.com/macros/s/AKfycbxvq9lJ6lYosKEX278Hu9YS-dvQlzvzEMILkq77ILhVHGVRwhypPxUE6Ngg1OO2j6YCAQ/exec';
+  var API_URL = '/api/data';
 
   var REFRESH_MS = 5 * 60 * 1000;   // ดึงซ้ำทุก 5 นาที เท่าจังหวะ sync ฝั่ง GAS
 
