@@ -19,8 +19,14 @@ const FALLBACK_URL =
 module.exports = async function handler(req, res) {
   const gasUrl = process.env.GAS_URL || FALLBACK_URL;
 
+  // token จาก login - ไม่ใช่ข้อมูลส่วนบุคคล จึงส่งทาง query ได้
+  const k = (req.query && req.query.k) || '';
+  if (!k) {
+    return res.status(401).json({ ok: false, code: 'AUTH', error: 'กรุณาเข้าสู่ระบบ' });
+  }
+
   try {
-    const upstream = await fetch(gasUrl + '?action=all', {
+    const upstream = await fetch(gasUrl + '?action=all&k=' + encodeURIComponent(k), {
       // GAS ตอบ 302 ไป googleusercontent ก่อน ต้องตามต่อ
       redirect: 'follow'
     });
@@ -44,7 +50,9 @@ module.exports = async function handler(req, res) {
      * stale-while-revalidate ของเก่าหมดอายุแล้วยังส่งให้ก่อน แล้วค่อยดึงใหม่เบื้องหลัง
      *                        คนที่เปิดหลังจากนี้จึงไม่ต้องรอ GAS เลย
      */
-    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=600');
+    // private = เบราว์เซอร์ของคนอื่นหรือ proxy กลางทางเก็บไว้ไม่ได้ แต่ CDN ของ Vercel
+    // ยัง cache ตาม URL เต็ม (รวม token) ได้ แต่ละคนจึงมีสำเนาของตัวเอง
+    res.setHeader('Cache-Control', 'private, s-maxage=60, stale-while-revalidate=600');
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
     return res.status(200).send(text);
 
